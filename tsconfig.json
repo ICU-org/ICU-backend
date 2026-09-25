@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "node16",
+    "moduleResolution": "node16",
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true
+  },
+  "include": ["src/**/*"],
+  "ts-node": {
+    // иначе ts-node (npm run dev, скрипты) не видит src/shared/types/*.d.ts,
+    // которые tsc подхватывает через include
+    "files": true
+  },
+  "exclude": ["node_modules", "dist"]
+}

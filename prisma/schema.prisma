@@ -1,0 +1,112 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── feedback ─────────────────────────────────────────────────
+
+/// Анонимное обращение гражданина: жалоба, предложение, что угодно.
+/// Полей об авторе нет намеренно — см. docs/architecture.md, «Анонимность».
+model Feedback {
+  id         String    @id @default(uuid())
+  message    String    @db.Text
+  createdAt  DateTime  @default(now()) @db.Timestamptz
+  /// Админ исключил из выгрузки для мэрии (мусор); null — попадает в файл.
+  excludedAt DateTime? @db.Timestamptz
+  /// Когда обращение впервые попало в файл для мэрии. Удаляется через 2 месяца
+  /// только выгруженное или исключённое — отметка на строке, а не период журнала.
+  exportedAt DateTime? @db.Timestamptz
+
+  @@index([createdAt])
+}
+
+/// Журнал выгрузок для мэрии. Текстов обращений нет — хранится дольше их.
+model ExportBatch {
+  id         String   @id @default(uuid())
+  /// Границы периода в UTC: [periodFrom, periodTo).
+  periodFrom DateTime @db.Timestamptz
+  periodTo   DateTime @db.Timestamptz
+  count      Int
+  /// Логин админа на момент выгрузки — снимок, без связи с AdminUser.
+  exportedBy String
+  createdAt  DateTime @default(now()) @db.Timestamptz
+
+  @@index([createdAt])
+}
+
+// ── content ──────────────────────────────────────────────────
+// Тексты страниц — JSON { hy, ru?, en? }: армянский обязателен, остальные по
+// желанию; сайт показывает язык интерфейса, без перевода — армянский.
+
+enum PartnerType {
+  GOV
+  CARRIER
+  PRIVATE
+}
+
+enum PartnerService {
+  GPS
+  CAMERAS
+  ANALYTICS
+  MAINTENANCE
+}
+
+model Partner {
+  id           String           @id @default(uuid())
+  name         Json
+  description  Json?
+  type         PartnerType
+  services     PartnerService[]
+  /// «Транспорт: N» на карточке — вводит админ.
+  vehicleCount Int?
+  /// «С нами с» — год.
+  partnerSince Int?
+  /// Имя файла в UPLOADS_DIR/partners; раздаётся по /uploads/partners/<файл>.
+  logoFile     String?
+  sortOrder    Int              @default(0)
+  /// Скрыть с сайта, не удаляя.
+  isVisible    Boolean          @default(true)
+  createdAt    DateTime         @default(now()) @db.Timestamptz
+  updatedAt    DateTime         @updatedAt @db.Timestamptz
+
+  @@index([isVisible, sortOrder])
+}
+
+/// Содержимое страницы сайта целиком, по строке на страницу: slug = "about".
+model PageContent {
+  slug      String   @id
+  data      Json
+  /// Логин админа, сохранившего последним.
+  updatedBy String
+  updatedAt DateTime @updatedAt @db.Timestamptz
+}
+
+// ── auth ─────────────────────────────────────────────────────
+
+model AdminUser {
+  id           String         @id @default(uuid())
+  login        String         @unique
+  passwordHash String
+  isActive     Boolean        @default(true)
+  lastLoginAt  DateTime?      @db.Timestamptz
+  createdAt    DateTime       @default(now()) @db.Timestamptz
+  updatedAt    DateTime       @updatedAt @db.Timestamptz
+  sessions     AdminSession[]
+}
+
+/// В cookie — случайный токен, здесь — только его SHA-256.
+model AdminSession {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  adminId   String
+  admin     AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  expiresAt DateTime  @db.Timestamptz
+  createdAt DateTime  @default(now()) @db.Timestamptz
+
+  @@index([adminId])
+  @@index([expiresAt])
+}

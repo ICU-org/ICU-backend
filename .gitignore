@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+
+# Логотипы партнёров (UPLOADS_DIR)
+uploads/
+
+# Документация проекта — только локально, не в git
+docs/
