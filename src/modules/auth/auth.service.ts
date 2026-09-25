@@ -3,6 +3,10 @@ import { AppError, ErrorCode } from "../../shared/errors/AppError";
 import { dummyHash, hashPassword, hashToken, newSessionToken, verifyPassword } from "./auth.crypto";
 
 const SESSION_TTL_MS = (Number(process.env.ADMIN_SESSION_TTL_HOURS) || 12) * 60 * 60 * 1000;
+/** Продлеваем, когда осталось меньше половины срока: работающего админа не выбрасывает. */
+const RENEW_WHEN_LEFT_MS = SESSION_TTL_MS / 2;
+/** Но не дольше недели от входа: забытая вкладка не держит вход вечно. */
+const SESSION_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const PASSWORD_MIN_LENGTH = 10;
 const LOGIN_FORMAT = /^[a-z0-9._-]{3,64}$/;
 
@@ -31,13 +35,36 @@ export async function logout(token: string) {
   await prisma.adminSession.deleteMany({ where: { tokenHash: hashToken(token) } });
 }
 
-export async function findAdminBySession(token: string): Promise<AdminPrincipal | null> {
+/**
+ * Сессия по токену из cookie. Скользящий срок: если осталось меньше половины,
+ * продлевается на полный срок (в пределах недели от входа); renewedUntil —
+ * новый срок, чтобы обновить и cookie.
+ */
+export async function resolveSession(token: string): Promise<{ admin: AdminPrincipal; renewedUntil: Date | null } | null> {
   const session = await prisma.adminSession.findUnique({
     where: { tokenHash: hashToken(token) },
-    select: { expiresAt: true, admin: { select: { id: true, login: true, isActive: true } } },
+    select: { id: true, expiresAt: true, createdAt: true, admin: { select: { id: true, login: true, isActive: true } } },
   });
-  if (!session || session.expiresAt <= new Date() || !session.admin.isActive) return null;
-  return { id: session.admin.id, login: session.admin.login };
+  const now = Date.now();
+  if (!session || session.expiresAt.getTime() <= now || !session.admin.isActive) return null;
+
+  const admin = { id: session.admin.id, login: session.admin.login };
+  if (session.expiresAt.getTime() - now >= RENEW_WHEN_LEFT_MS) return { admin, renewedUntil: null };
+
+  const until = new Date(Math.min(now + SESSION_TTL_MS, session.createdAt.getTime() + SESSION_MAX_AGE_MS));
+  if (until <= session.expiresAt) return { admin, renewedUntil: null };
+
+  // updateMany, а не update: сессию могли удалить между чтением и записью (выход
+  // в другой вкладке, --reset) — update() бросил бы P2025 → 500 вместо 401.
+  // Условие «срок раньше нового», а не точное равенство прочитанному: в БД
+  // время хранится в микросекундах, в JS — в миллисекундах.
+  const { count } = await prisma.adminSession.updateMany({
+    where: { id: session.id, expiresAt: { lt: until } },
+    data: { expiresAt: until },
+  });
+  if (count === 1) return { admin, renewedUntil: until };
+  const still = await prisma.adminSession.findUnique({ where: { id: session.id }, select: { expiresAt: true } });
+  return still && still.expiresAt.getTime() > Date.now() ? { admin, renewedUntil: null } : null;
 }
 
 /** Для scripts/create-admin.ts. reset — сменить пароль существующему и закрыть его сессии. */

@@ -2,7 +2,7 @@ import { BlockList, isIP } from "net";
 import { Request, Response, NextFunction, CookieOptions } from "express";
 import { rateLimit } from "express-rate-limit";
 import { AppError } from "../../shared/errors/AppError";
-import { findAdminBySession } from "./auth.service";
+import { resolveSession } from "./auth.service";
 
 export const SESSION_COOKIE = "icu_admin";
 
@@ -64,12 +64,13 @@ export const adminNetworkGuard = (req: Request, _res: Response, next: NextFuncti
   next(AppError.notFound("Resource not found"));
 };
 
-/** Сессия админа из cookie → req.admin; нет или истекла — 401. */
-export const requireAdmin = async (req: Request, _res: Response, next: NextFunction) => {
+/** Сессия админа из cookie → req.admin; нет или истекла — 401. Продлённая — новый срок и в cookie. */
+export const requireAdmin = async (req: Request, res: Response, next: NextFunction) => {
   const token: unknown = req.cookies?.[SESSION_COOKIE];
-  const admin = typeof token === "string" && token ? await findAdminBySession(token) : null;
-  if (!admin) return next(AppError.unauthorized());
-  req.admin = admin;
+  const session = typeof token === "string" && token ? await resolveSession(token) : null;
+  if (!session) return next(AppError.unauthorized());
+  if (session.renewedUntil) res.cookie(SESSION_COOKIE, token, sessionCookieOptions(session.renewedUntil));
+  req.admin = session.admin;
   next();
 };
 
